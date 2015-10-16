@@ -231,7 +231,7 @@ subroutine compute_J_integral(J_integral_value)
     use Element_Utilities, only : N => shape_functions_2D
     use Element_Utilities, only:  dNdxi => shape_function_derivatives_2D
     use Element_Utilities, only:  dNdx => shape_function_spatial_derivatives_2D
-    use Element_Utilities, only : xi => integrationpoints_3D, w => integrationweights_2D
+    use Element_Utilities, only : xi => integrationpoints_2D, w => integrationweights_2D
     use Element_Utilities, only : dxdxi => jacobian_2D
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
@@ -306,19 +306,20 @@ subroutine compute_J_integral(J_integral_value)
 
     lmn_start = zone_list(2)%start_element
     lmn_end = zone_list(2)%end_element
-write(*,*) lmn_start, lmn_end
+     write(*,*) lmn_start, lmn_end
      J_integral_value = 0.d0
      delta = 0.d0
-     delta(1:2,2:1)=0.d0
      delta(1,1) = 1.d0
      delta(2,2) = 1.d0
 
   !  The two subroutines below extract data for elements and nodes (see module Mesh.f90 for the source code for these subroutines)
     do lmn=lmn_start, lmn_end
 
+
     call extract_element_data(lmn,element_identifier,n_nodes,node_list,n_properties,element_properties, &
                                             n_state_variables,initial_state_variables,updated_state_variables)
 
+    if (n_nodes ==6) cycle
 ! Use 9 integration points
     if (n_nodes == 6) n_points = 9
     if (n_nodes == 8) n_points = 9
@@ -382,29 +383,28 @@ write(*,*) lmn_start, lmn_end
 ! Calculating the distance of mapped points and strain energy
         r0 = 0.0006d0
         r = dsqrt(dot_product(xmap(1:2),xmap(1:2)))
-        w=0.d0
-     do ii=1,2
-       do jj=1,2
-          WW=sigmatrix(ii,jj)*epsmatrix(ii,jj)/2.d0
-       end do
-     end do
+        write(6,*) r
+        WW = dot_product(stress,strain)*0.5d0
 
 ! Calculating strain
        SS=0.d0
        do nn =1,n_nodes
-             SS(1:2)=dNdx(nn,2)*(dof_total(2*nn-1:2*nn))
+             SS(1:2)= SS(1:2) + dNdx(nn,2)*(dof_total(2*nn-1:2*nn)+dof_increment(2*nn-1:2*nn))
        end do
 
 ! Do the J integral
        do ii = 1,2
          do jj = 1,2
-             J_integral_value = (sigmatrix(ii,jj)*SS(ii)-WW*delta(jj,2))*(-xmap(jj)/(r0*r))*w(kint)*determinant
+             J_integral_value = J_integral_value + &
+              (sigmatrix(ii,jj)*SS(ii)-WW*delta(jj,2))*(-xmap(jj)/(r0*r))*w(kint)*determinant
            end do
          end do
        end do
 
 end do
 
+
+   write(6,*) J_integral_value
     deallocate(node_list)
     deallocate(element_properties)
     deallocate(initial_state_variables)
