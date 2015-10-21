@@ -1,4 +1,4 @@
-!     Subroutines for basic 3D linear elastic elements 
+!     Subroutines for basic 3D linear elastic elements
 
 
 
@@ -20,6 +20,8 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
     use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
+
     implicit none
 
     integer, intent( in )         :: lmn                                                    ! Element number
@@ -64,6 +66,7 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
     real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
     real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  :: volume
     !
     !     Subroutine to compute element stiffness matrix and residual force vector for 3D linear elastic elements
     !     El props are:
@@ -79,12 +82,26 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     if (n_nodes == 10) n_points = 4
     if (n_nodes == 8) n_points = 8
     if (n_nodes == 20) n_points = 27
-
     call initialize_integration_points(n_points, n_nodes, xi, w)
+     volume = 0.d0
+     dNbardx = 0.d0
+     do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        dNbardx(1:n_nodes,1) = dNbardx(1:n_nodes,1)+dNdx(1:n_nodes,1)*w(kint)*determinant
+        dNbardx(1:n_nodes,2) = dNbardx(1:n_nodes,2)+dNdx(1:n_nodes,2)*w(kint)*determinant
+        dNbardx(1:n_nodes,3) = dNbardx(1:n_nodes,3)+dNdx(1:n_nodes,3)*w(kint)*determinant
+        volume = volume+w(kint)*determinant
+        end do
+
+
+
 
     element_residual = 0.d0
     element_stiffness = 0.d0
-	
+
     D = 0.d0
     E = element_properties(1)
     xnu = element_properties(2)
@@ -100,12 +117,15 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
     D(6,6) = d44
   
     !     --  Loop over integration points
-    do kint = 1, n_points
+
+
+     do kint = 1, n_points
         call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
         dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
         call invert_small(dxdxi,dxidx,determinant)
         dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
         B = 0.d0
+    if(element_identifier == 1001) then
         B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)
         B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)
         B(3,3:3*n_nodes:3)   = dNdx(1:n_nodes,3)
@@ -115,6 +135,24 @@ subroutine el_linelast_3dbasic(lmn, element_identifier, n_nodes, node_property_l
         B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
         B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
         B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+     end if
+     if (element_identifier == 11) then
+        B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)+(1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(1,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(1,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(2,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)+(1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(2,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(3,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(3,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(3,3:3*n_nodes:3) = dNdx(1:n_nodes,3)+(1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+        B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+        B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+        B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+        B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+        B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+     end if
 
         strain = matmul(B,dof_total)
         dstrain = matmul(B,dof_increment)
@@ -208,7 +246,7 @@ subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_pr
     call initialize_integration_points(n_points, n_nodes, xi, w)
 
     element_residual = 0.d0
-	
+
     D = 0.d0
     E = element_properties(1)
     xnu = element_properties(2)
@@ -270,6 +308,7 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     use Element_Utilities, only : initialize_integration_points
     use Element_Utilities, only : calculate_shapefunctions
     use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
     implicit none
 
     integer, intent( in )         :: lmn                                                    ! Element number
@@ -317,7 +356,7 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
     real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
     real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
-    real (prec)  :: p, smises                          ! Pressure and Mises stress
+    real (prec)  :: p, smises, volume                       ! Pressure and Mises stress
     !
     !     Subroutine to compute element contribution to project element integration point data to nodes
 
@@ -330,11 +369,25 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
     if (n_nodes == 10) n_points = 4
     if (n_nodes == 8) n_points = 8
     if (n_nodes == 20) n_points = 27
-
     call initialize_integration_points(n_points, n_nodes, xi, w)
+    volume = 0.d0
+    dNbardx = 0.d0
+     do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        dNbardx(1:n_nodes,1) = dNbardx(1:n_nodes,1)+dNdx(1:n_nodes,1)*w(kint)*determinant
+        dNbardx(1:n_nodes,2) = dNbardx(1:n_nodes,2)+dNdx(1:n_nodes,2)*w(kint)*determinant
+        dNbardx(1:n_nodes,3) = dNbardx(1:n_nodes,3)+dNdx(1:n_nodes,3)*w(kint)*determinant
+        volume = volume+w(kint)*determinant
+        end do
+
+
+
 
     nodal_fieldvariables = 0.d0
-	
+
     D = 0.d0
     E = element_properties(1)
     xnu = element_properties(2)
@@ -356,6 +409,7 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
         call invert_small(dxdxi,dxidx,determinant)
         dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
         B = 0.d0
+    if(element_identifier == 1001) then
         B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)
         B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)
         B(3,3:3*n_nodes:3)   = dNdx(1:n_nodes,3)
@@ -365,6 +419,24 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
         B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
         B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
         B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+     end if
+     if (element_identifier == 11) then
+        B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)+(1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(1,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(1,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(2,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)+(1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(2,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(3,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(3,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(3,3:3*n_nodes:3) = dNdx(1:n_nodes,3)+(1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+        B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+        B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+        B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+        B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+        B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+     end if
 
         strain = matmul(B,dof_total)
         dstrain = matmul(B,dof_increment)
@@ -396,4 +468,5 @@ subroutine fieldvars_linelast_3dbasic(lmn, element_identifier, n_nodes, node_pro
   
     return
 end subroutine fieldvars_linelast_3dbasic
+
 
