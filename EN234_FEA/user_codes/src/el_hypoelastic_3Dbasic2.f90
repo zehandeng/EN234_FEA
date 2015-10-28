@@ -1,0 +1,596 @@
+!     Subroutines for basic 3D linear elastic elements
+
+
+
+!==========================SUBROUTINE el_hypoelastic_3dbasic ==============================
+subroutine el_hypoelastic_3dbasic(lmn, element_identifier, n_nodes, node_property_list, &           ! Input variables
+    n_properties, element_properties, element_coords, length_coord_array, &                      ! Input variables
+    dof_increment, dof_total, length_dof_array, &                                                ! Input variables
+    n_state_variables, initial_state_variables, &                                                ! Input variables
+    updated_state_variables,element_stiffness,element_residual, fail)      ! Output variables                          ! Output variables
+    use Types
+    use ParamIO
+    !  use Globals, only: TIME,DTIME  For a time dependent problem uncomment this line to access the time increment and total time
+    use Mesh, only : node
+    use Element_Utilities, only : N => shape_functions_3D
+    use Element_Utilities, only : dNdxi => shape_function_derivatives_3D
+    use Element_Utilities, only:  dNdx => shape_function_spatial_derivatives_3D
+    use Element_Utilities, only : xi => integrationpoints_3D, w => integrationweights_3D
+    use Element_Utilities, only : dxdxi => jacobian_3D
+    use Element_Utilities, only : initialize_integration_points
+    use Element_Utilities, only : calculate_shapefunctions
+    use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
+
+    implicit none
+
+    integer, intent( in )         :: lmn                                                    ! Element number
+    integer, intent( in )         :: element_identifier                                     ! Flag identifying element type (specified in .in file)
+    integer, intent( in )         :: n_nodes                                                ! # nodes on the element
+    integer, intent( in )         :: n_properties                                           ! # properties for the element
+    integer, intent( in )         :: length_coord_array                                     ! Total # coords
+    integer, intent( in )         :: length_dof_array                                       ! Total # DOF
+    integer, intent( in )         :: n_state_variables                                      ! # state variables for the element
+
+    type (node), intent( in )     :: node_property_list(n_nodes)                  ! Data structure describing storage for nodal variables - see below
+    !  type node
+    !      sequence
+    !      integer :: flag                          ! Integer identifier
+    !      integer :: coord_index                   ! Index of first coordinate in coordinate array
+    !      integer :: n_coords                      ! Total no. coordinates for the node
+    !      integer :: dof_index                     ! Index of first DOF in dof array
+    !      integer :: n_dof                         ! Total no. of DOF for node
+    !   end type node
+    !   Access these using node_property_list(k)%n_coords eg to find the number of coords for the kth node on the element
+
+    real( prec ), intent( in )    :: element_coords(length_coord_array)                     ! Coordinates, stored as x1,(x2),(x3) for each node in turn
+    real( prec ), intent( in )    :: dof_increment(length_dof_array)                        ! DOF increment, stored as du1,du2,du3,du4... for each node in turn
+    real( prec ), intent( in )    :: dof_total(length_dof_array)                            ! accumulated DOF, same storage as for increment
+
+    real( prec ), intent( in )    :: element_properties(n_properties)                       ! Element or material properties, stored in order listed in input file
+    real( prec ), intent( in )    :: initial_state_variables(n_state_variables)             ! Element state variables.  Defined in this routine
+  
+    logical, intent( out )        :: fail                                                   ! Set to .true. to force a timestep cutback
+    real( prec ), intent( inout ) :: updated_state_variables(n_state_variables)             ! State variables at end of time step
+    real( prec ), intent( out )   :: element_stiffness(length_dof_array,length_dof_array)   ! Element stiffness (ROW,COLUMN)
+    real( prec ), intent( out )   :: element_residual(length_dof_array)                     ! Element residual force (ROW)
+          
+
+    ! Local Variables
+    integer      :: n_points,kint,flag
+
+    real (prec)  ::  strain(6), dstrain(6), epsdev(6), straintotal(6),zero(6)           ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
+    real (prec)  ::  stress(6)                         ! Stress vector contains [s11, s22, s33, s12, s13, s23]
+    real (prec)  ::  D(6,6)                            ! stress = D*(strain+dstrain)  (NOTE FACTOR OF 2 in shear strain)
+    real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
+    real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
+    real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
+!    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  :: volume, straineff, stresseff, Et, Es, eij
+    real (prec)  :: matrix1(6,6), matrix2(6,6)
+    real (prec)  :: sig0, eps0, NN, KK
+    integer (prec) :: i, j
+    real (prec)  :: e_dyadic_e(6,6)
+    !
+    !     Subroutine to compute element stiffness matrix and residual force vector for 3D linear elastic elements
+    !     El props are:
+
+    !     element_properties(1)         Young's modulus
+    !     element_properties(2)         Poisson's ratio
+
+    fail = .false.
+    
+    x = reshape(element_coords,(/3,length_coord_array/3/))
+
+    if (n_nodes == 4) n_points = 1
+    if (n_nodes == 10) n_points = 4
+    if (n_nodes == 8) n_points = 8
+    if (n_nodes == 20) n_points = 27
+    call initialize_integration_points(n_points, n_nodes, xi, w)
+     volume = 0.d0
+     dNbardx = 0.d0
+     do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        dNbardx(1:n_nodes,1) = dNbardx(1:n_nodes,1)+dNdx(1:n_nodes,1)*w(kint)*determinant
+        dNbardx(1:n_nodes,2) = dNbardx(1:n_nodes,2)+dNdx(1:n_nodes,2)*w(kint)*determinant
+        dNbardx(1:n_nodes,3) = dNbardx(1:n_nodes,3)+dNdx(1:n_nodes,3)*w(kint)*determinant
+        volume = volume+w(kint)*determinant
+     end do
+
+
+! define material parameters
+    element_residual = 0.d0
+    element_stiffness = 0.d0
+    D = 0.d0
+    sig0 = element_properties(1)
+    eps0 = element_properties(2)
+    NN = element_properties(3)
+    KK = element_properties(4)
+  
+    !     --  Loop over integration points
+
+
+     do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        B = 0.d0
+        B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)+(1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(1,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(1,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(2,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)+(1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(2,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(3,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(3,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(3,3:3*n_nodes:3) = dNdx(1:n_nodes,3)+(1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+        B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+        B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+        B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+        B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+        B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+
+        strain = matmul(B(1:6,1:3*n_nodes),dof_total(1:3*n_nodes))
+        dstrain = matmul(B(1:6,1:3*n_nodes),dof_increment(1:3*n_nodes))
+        straintotal = strain+dstrain
+
+! define deviatoric strain
+      epsdev(1) = straintotal(1)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(2) = straintotal(2)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(3) = straintotal(3)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(4) = straintotal(4)/2.d0
+      epsdev(5) = straintotal(5)/2.d0
+      epsdev(6) = straintotal(6)/2.d0
+
+! define effective strain
+      eij = 0
+      do i = 1,3
+          eij = eij+(epsdev(i)*epsdev(i))
+      end do
+      do i = 4,6
+          eij = eij+2.d0*(epsdev(i)*epsdev(i))
+      end do
+      straineff = dsqrt(2.d0/3.d0*eij)
+
+! compare effective strain and epsilon zero, calculate effective stress and Es Et
+      Et = 0.d0
+      Es = 0.d0
+      if (straineff <= eps0) then
+      stresseff = (dsqrt( (1.d0+NN**2.d0)/(NN-1.d0)**2.d0-(NN/(NN-1.d0)-straineff/eps0)**2.d0)-1.d0/(NN-1.d0))*sig0
+      Et = (NN/(NN-1.d0)-straineff/eps0)/eps0*sig0
+      Et=Et/dsqrt( (1.d0+NN**2.d0)/(NN-1.d0)**2.d0-(NN/(NN-1.d0)-straineff/eps0)**2.d0)
+      else
+      stresseff = ((straineff/eps0)**(1.d0/NN))*sig0
+      Et = (straineff/eps0)**(1.d0/NN-1.d0)/(NN*eps0)*sig0
+      end if
+
+
+! define matrix in D and e_dyadic_e
+      matrix1 = 0.d0
+      do i = 1,3
+      matrix1(i,i)=2.d0
+      end do
+      do i = 4,6
+      matrix1(i,i)=1.d0
+      end do
+
+      matrix2 = 0.d0
+      do i = 1,3
+         do j = 1,3
+         matrix2(i,j) = 1
+         end do
+      end do
+
+      e_dyadic_e = spread(epsdev,dim=2,ncopies=6)*spread(epsdev,dim=1,ncopies=6)
+
+! calculate stress
+      if (straineff > 0.d0) then
+         stress(1:3) = 2.d0/3.d0*stresseff*epsdev(1:3)/straineff+KK*(straintotal(1)+straintotal(2)+straintotal(3))
+         stress(4:6) = 2.d0/3.d0*stresseff*epsdev(4:6)/straineff
+         Es = stresseff/straineff
+         D = 4.d0/(9.d0*straineff**2)*(Et-Es)*e_dyadic_e+Es/3.d0*matrix1+(KK-2.d0*Es/9.d0)*matrix2
+     else
+         stress(1:3) = KK*(straintotal(1)+straintotal(2)+straintotal(3))
+         stress(4:6) = 0
+         D = Et/3.d0*matrix1+(KK-2.d0*Et/9.d0)*matrix2
+      end if
+
+! Verify if strain total is 0, and calculate the D respectively
+!     flag=0
+!     do i=1,6
+!          if((straintotal(i))>1.d-010) then
+!               flag=1
+!          end if
+!     end do
+!       if (flag==1) then
+! D matrix When strain total is non-zero
+!!       else
+!         D = Et/3.d0*matrix1+(KK-2.d0*Et/9.d0)*matrix2  ! D matrix when strain total is zero
+!       end i
+
+!        call hypoelastic_material(straintotal,element_properties,n_properties,stress,D)
+
+        element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+
+        element_stiffness(1:3*n_nodes,1:3*n_nodes) = element_stiffness(1:3*n_nodes,1:3*n_nodes) &
+            + matmul(transpose(B(1:6,1:3*n_nodes)),matmul(D,B(1:6,1:3*n_nodes)))*w(kint)*determinant
+
+    end do
+  
+    return
+end subroutine el_hypoelastic_3dbasic
+
+
+!==========================SUBROUTINE el_linelast_3dbasic_dynamic ==============================
+!subroutine el_linelast_3dbasic_dynamic(lmn, element_identifier, n_nodes, node_property_list, &           ! Input variables
+!    n_properties, element_properties,element_coords, length_coord_array, &                               ! Input variables
+!    dof_increment, dof_total, length_dof_array,  &                                                       ! Input variables
+!    n_state_variables, initial_state_variables, &                                                        ! Input variables
+!    updated_state_variables,element_residual,element_deleted)                                            ! Output variables
+!    use Types
+!    use ParamIO
+!    use Mesh, only : node
+!    use Element_Utilities, only : N => shape_functions_3D
+!    use Element_Utilities, only:  dNdxi => shape_function_derivatives_3D
+!    use Element_Utilities, only:  dNdx => shape_function_spatial_derivatives_3D
+!    use Element_Utilities, only : xi => integrationpoints_3D, w => integrationweights_3D
+!    use Element_Utilities, only : dxdxi => jacobian_3D
+!    use Element_Utilities, only : initialize_integration_points
+!    use Element_Utilities, only : calculate_shapefunctions
+!    use Element_Utilities, only : invert_small
+!    implicit none
+!
+!    integer, intent( in )         :: lmn                                                    ! Element number
+!    integer, intent( in )         :: element_identifier                                     ! Flag identifying element type (specified in .in file)
+!    integer, intent( in )         :: n_nodes                                                ! # nodes on the element
+!    integer, intent( in )         :: n_properties                                           ! # properties for the element
+!    integer, intent( in )         :: length_coord_array                                     ! Total # coords
+!    integer, intent( in )         :: length_dof_array                                       ! Total # DOF
+!    integer, intent( in )         :: n_state_variables                                      ! # state variables for the element
+!
+!    type (node), intent( in )     :: node_property_list(n_nodes)                  ! Data structure describing storage for nodal variables - see below
+!    !  type node
+!    !      sequence
+!    !      integer :: flag                          ! Integer identifier
+!    !      integer :: coord_index                   ! Index of first coordinate in coordinate array
+!    !      integer :: n_coords                      ! Total no. coordinates for the node
+!    !      integer :: dof_index                     ! Index of first DOF in dof array
+!    !      integer :: n_dof                         ! Total no. of DOF for node
+!    !   end type node
+!    !   Access these using node_property_list(k)%n_coords eg to find the number of coords for the kth node on the element
+!
+!    real( prec ), intent( in )    :: element_coords(length_coord_array)                     ! Coordinates, stored as x1,(x2),(x3) for each node in turn
+!    real( prec ), intent( in )    :: dof_increment(length_dof_array)                        ! DOF increment, stored as du1,du2,du3,du4... for each node in turn
+!    real( prec ), intent( in )    :: dof_total(length_dof_array)                            ! accumulated DOF, same storage as for increment
+!
+!    real( prec ), intent( in )    :: element_properties(n_properties)                       ! Element or material properties, stored in order listed in input file
+!    real( prec ), intent( in )    :: initial_state_variables(n_state_variables)             ! Element state variables.  Defined in this routine
+!
+!    real( prec ), intent( inout ) :: updated_state_variables(n_state_variables)             ! State variables at end of time step
+!    real( prec ), intent( out )   :: element_residual(length_dof_array)                     ! Element residual force (ROW)
+!
+!    logical, intent( inout )      :: element_deleted                                        ! Set to .true. to delete element
+!
+!    ! Local Variables
+!    integer      :: n_points,kint
+!
+!    real (prec)  ::  strain(6), dstrain(6)             ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
+!    real (prec)  ::  stress(6)                         ! Stress vector contains [s11, s22, s33, s12, s13, s23]
+!    real (prec)  ::  D(6,6)                            ! stress = D*(strain+dstrain)  (NOTE FACTOR OF 2 in shear strain)
+!    real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
+!    real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
+!    real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
+!    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+!    !
+!    !     Subroutine to compute element force vector for a linear elastodynamic problem
+!    !     El props are:
+!
+!    !     element_properties(1)         Young's modulus
+!    !     element_properties(2)         Poisson's ratio
+!
+!    x = reshape(element_coords,(/3,length_coord_array/3/))
+!
+!    if (n_nodes == 4) n_points = 1
+!    if (n_nodes == 10) n_points = 4
+!    if (n_nodes == 8) n_points = 8
+!    if (n_nodes == 20) n_points = 27
+!
+!    call initialize_integration_points(n_points, n_nodes, xi, w)
+!
+!    element_residual = 0.d0
+!
+!    D = 0.d0
+!    E = element_properties(1)
+!    xnu = element_properties(2)
+!    d44 = 0.5D0*E/(1+xnu)
+!    d11 = (1.D0-xnu)*E/( (1+xnu)*(1-2.D0*xnu) )
+!    d12 = xnu*E/( (1+xnu)*(1-2.D0*xnu) )
+!    D(1:3,1:3) = d12
+!    D(1,1) = d11
+!    D(2,2) = d11
+!    D(3,3) = d11
+!    D(4,4) = d44
+!    D(5,5) = d44
+!    D(6,6) = d44
+!
+!    !     --  Loop over integration points
+!    do kint = 1, n_points
+!        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+!        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+!        call invert_small(dxdxi,dxidx,determinant)
+!        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+!        B = 0.d0
+!        B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)
+!        B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)
+!        B(3,3:3*n_nodes:3)   = dNdx(1:n_nodes,3)
+!        B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+!        B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+!        B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+!        B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+!        B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+!        B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+!
+!        strain = matmul(B,dof_total)
+!        dstrain = matmul(B,dof_increment)
+!
+!        stress = matmul(D,strain+dstrain)
+!        element_residual(1:3*n_nodes) = element_residual(1:3*n_nodes) - matmul(transpose(B),stress)*w(kint)*determinant
+!
+!    end do
+!
+!    return
+!end subroutine el_linelast_3dbasic_dynamic
+
+
+!==========================SUBROUTINE fieldvars_linelast_3dbasic ==============================
+subroutine fieldvars_hypoelastic_3dbasic(lmn, element_identifier, n_nodes, node_property_list, &           ! Input variables
+    n_properties, element_properties,element_coords,length_coord_array, &                                ! Input variables
+    dof_increment, dof_total, length_dof_array,  &                                                      ! Input variables
+    n_state_variables, initial_state_variables,updated_state_variables, &                               ! Input variables
+    n_field_variables,field_variable_names, &                                                           ! Field variable definition
+    nodal_fieldvariables)      ! Output variables
+    use Types
+    use ParamIO
+    use Mesh, only : node
+    use Element_Utilities, only : N => shape_functions_3D
+    use Element_Utilities, only: dNdxi => shape_function_derivatives_3D
+    use Element_Utilities, only: dNdx => shape_function_spatial_derivatives_3D
+    use Element_Utilities, only : xi => integrationpoints_3D, w => integrationweights_3D
+    use Element_Utilities, only : dxdxi => jacobian_3D
+    use Element_Utilities, only : initialize_integration_points
+    use Element_Utilities, only : calculate_shapefunctions
+    use Element_Utilities, only : invert_small
+    use Element_Utilities, only : dNbardx => vol_avg_shape_function_derivatives_3D
+    implicit none
+
+    integer, intent( in )         :: lmn                                                    ! Element number
+    integer, intent( in )         :: element_identifier                                     ! Flag identifying element type (specified in .in file)
+    integer, intent( in )         :: n_nodes                                                ! # nodes on the element
+    integer, intent( in )         :: n_properties                                           ! # properties for the element
+    integer, intent( in )         :: length_coord_array                                     ! Total # coords
+    integer, intent( in )         :: length_dof_array                                       ! Total # DOF
+    integer, intent( in )         :: n_state_variables                                      ! # state variables for the element
+    integer, intent( in )         :: n_field_variables                                      ! # field variables
+
+    type (node), intent( in )     :: node_property_list(n_nodes)                  ! Data structure describing storage for nodal variables - see below
+    !  type node
+    !      sequence
+    !      integer :: flag                          ! Integer identifier
+    !      integer :: coord_index                   ! Index of first coordinate in coordinate array
+    !      integer :: n_coords                      ! Total no. coordinates for the node
+    !      integer :: dof_index                     ! Index of first DOF in dof array
+    !      integer :: n_dof                         ! Total no. of DOF for node
+    !   end type node
+    !   Access these using node_property_list(k)%n_coords eg to find the number of coords for the kth node on the element
+
+    character (len=100), intent(in) :: field_variable_names(n_field_variables)
+
+    real( prec ), intent( in )    :: element_coords(length_coord_array)                     ! Coordinates, stored as x1,x2,(x3) for each node in turn
+    real( prec ), intent( in )    :: dof_increment(length_dof_array)                        ! DOF increment, stored as du1,du2,du3,du4... for each node in turn
+    real( prec ), intent( in )    :: dof_total(length_dof_array)                            ! accumulated DOF, same storage as for increment
+
+    real( prec ), intent( in )    :: element_properties(n_properties)                       ! Element or material properties, stored in order listed in input file
+    real( prec ), intent( in )    :: initial_state_variables(n_state_variables)             ! Element state variables.  Defined in this routine
+    real( prec ), intent( in )    :: updated_state_variables(n_state_variables)             ! State variables at end of time step
+             
+    real( prec ), intent( out )   :: nodal_fieldvariables(n_field_variables,n_nodes)        ! Nodal field variables
+  
+    ! Local Variables
+    logical      :: strcmp
+  
+    integer      :: n_points,kint,k, flag
+
+    real (prec)  ::  strain(6), dstrain(6), epsdev(6), straintotal(6),zero(6)            ! Strain vector contains [e11, e22, e33, 2e12, 2e13, 2e23]
+    real (prec)  ::  stress(6)                         ! Stress vector contains [s11, s22, s33, s12, s13, s23]
+    real (prec)  ::  D(6,6)                            ! stress = D*(strain+dstrain)  (NOTE FACTOR OF 2 in shear strain)
+    real (prec)  ::  B(6,length_dof_array)             ! strain = B*(dof_total+dof_increment)
+    real (prec)  ::  dxidx(3,3), determinant           ! Jacobian inverse and determinant
+    real (prec)  ::  x(3,length_coord_array/3)         ! Re-shaped coordinate array x(i,a) is ith coord of ath node
+    real (prec)  :: E, xnu, D44, D11, D12              ! Material properties
+    real (prec)  :: volume, straineff, stresseff, Et, Es, eij
+    real (prec)  :: matrix1(6,6), matrix2(6,6)
+    real (prec)  :: sig0, eps0, KK, NN
+    integer (prec) :: i, j
+    real (prec)  :: e_dyadic_e(6,6)
+    !
+    !     Subroutine to compute element contribution to project element integration point data to nodes
+
+    !     element_properties(1)         Young's modulus
+    !     element_properties(2)         Poisson's ratio
+
+    x = reshape(element_coords,(/3,length_coord_array/3/))
+
+    if (n_nodes == 4) n_points = 1
+    if (n_nodes == 10) n_points = 4
+    if (n_nodes == 8) n_points = 8
+    if (n_nodes == 20) n_points = 27
+    call initialize_integration_points(n_points, n_nodes, xi, w)
+    volume = 0.d0
+    dNbardx = 0.d0
+     do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        dNbardx(1:n_nodes,1) = dNbardx(1:n_nodes,1)+dNdx(1:n_nodes,1)*w(kint)*determinant
+        dNbardx(1:n_nodes,2) = dNbardx(1:n_nodes,2)+dNdx(1:n_nodes,2)*w(kint)*determinant
+        dNbardx(1:n_nodes,3) = dNbardx(1:n_nodes,3)+dNdx(1:n_nodes,3)*w(kint)*determinant
+        volume = volume+w(kint)*determinant
+    end do
+
+
+
+
+    nodal_fieldvariables = 0.d0
+
+    D = 0.d0
+    sig0 = element_properties(1)
+    eps0 = element_properties(2)
+    NN = element_properties(3)
+    KK = element_properties(4)
+  
+    !     --  Loop over integration points
+
+
+    !     --  Loop over integration points
+    do kint = 1, n_points
+        call calculate_shapefunctions(xi(1:3,kint),n_nodes,N,dNdxi)
+        dxdxi = matmul(x(1:3,1:n_nodes),dNdxi(1:n_nodes,1:3))
+        call invert_small(dxdxi,dxidx,determinant)
+        dNdx(1:n_nodes,1:3) = matmul(dNdxi(1:n_nodes,1:3),dxidx)
+        B = 0.d0
+        B(1,1:3*n_nodes-2:3) = dNdx(1:n_nodes,1)+(1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(1,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(1,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(2,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(2,2:3*n_nodes-1:3) = dNdx(1:n_nodes,2)+(1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(2,3:3*n_nodes:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(3,1:3*n_nodes-2:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,1)/volume-dNdx(1:n_nodes,1))
+        B(3,2:3*n_nodes-1:3) = (1.d0/3.d0)*(dNbardx(1:n_nodes,2)/volume-dNdx(1:n_nodes,2))
+        B(3,3:3*n_nodes:3) = dNdx(1:n_nodes,3)+(1.d0/3.d0)*(dNbardx(1:n_nodes,3)/volume-dNdx(1:n_nodes,3))
+        B(4,1:3*n_nodes-2:3) = dNdx(1:n_nodes,2)
+        B(4,2:3*n_nodes-1:3) = dNdx(1:n_nodes,1)
+        B(5,1:3*n_nodes-2:3) = dNdx(1:n_nodes,3)
+        B(5,3:3*n_nodes:3)   = dNdx(1:n_nodes,1)
+        B(6,2:3*n_nodes-1:3) = dNdx(1:n_nodes,3)
+        B(6,3:3*n_nodes:3)   = dNdx(1:n_nodes,2)
+
+        strain = matmul(B,dof_total)
+        dstrain = matmul(B,dof_increment)
+        straintotal = strain+dstrain
+
+! define deviatoric strain
+      epsdev(1) = straintotal(1)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(2) = straintotal(2)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(3) = straintotal(3)-1.d0/3.d0*(straintotal(1)+straintotal(2)+straintotal(3))
+      epsdev(4) = straintotal(4)/2.d0
+      epsdev(5) = straintotal(5)/2.d0
+      epsdev(6) = straintotal(6)/2.d0
+
+! define effective strain
+      eij = 0
+      do i = 1,3
+          eij = eij+(epsdev(i)*epsdev(i))
+      end do
+      do i = 4,6
+          eij = eij+2.d0*(epsdev(i)*epsdev(i))
+      end do
+      straineff = dsqrt(2.d0/3.d0*eij)
+
+! compare effective strain and epsilon zero, calculate effective stress and Es Et
+      Et = 0.d0
+      Es = 0.d0
+      if (straineff <= eps0) then
+      stresseff = (dsqrt( (1.d0+NN**2.d0)/(NN-1.d0)**2.d0-(NN/(NN-1.d0)-straineff/eps0)**2.d0)-1.d0/(NN-1.d0))*sig0
+      Et = (NN/(NN-1.d0)-straineff/eps0)/eps0*sig0
+      Et=Et/dsqrt( (1.d0+NN**2.d0)/(NN-1.d0)**2.d0-(NN/(NN-1.d0)-straineff/eps0)**2.d0)
+      else
+      stresseff = ((straineff/eps0)**(1.d0/NN))*sig0
+      Et = (straineff/eps0)**(1.d0/NN-1.d0)/(NN*eps0)*sig0
+      end if
+
+
+! define matrix in D and e_dyadic_e
+      matrix1 = 0.d0
+      do i = 1,3
+      matrix1(i,i)=2.d0
+      end do
+      do i = 4,6
+      matrix1(i,i)=1.d0
+      end do
+
+      matrix2 = 0.d0
+      do i = 1,3
+         do j = 1,3
+         matrix2(i,j) = 1
+         end do
+      end do
+
+      e_dyadic_e = spread(epsdev,dim=2,ncopies=6)*spread(epsdev,dim=1,ncopies=6)
+
+! calculate stress
+      if (straineff > 0.d0) then
+         stress(1:3) = 2.d0/3.d0*stresseff*epsdev(1:3)/straineff+KK*(straintotal(1)+straintotal(2)+straintotal(3))
+         stress(4:6) = 2.d0/3.d0*stresseff*epsdev(4:6)/straineff
+         Es = stresseff/straineff
+         D = 4.d0/(9.d0*straineff**2)*(Et-Es)*e_dyadic_e+Es/3.d0*matrix1+(KK-2.d0*Es/9.d0)*matrix2
+     else
+         stress(1:3) = KK*(straintotal(1)+straintotal(2)+straintotal(3))
+         stress(4:6) = 0
+         D = Et/3.d0*matrix1+(KK-2.d0*Et/9.d0)*matrix2
+      end if
+
+!        p = sum(stress(1:3))/3.d0
+!        sdev = stress
+!        sdev(1:3) = sdev(1:3)-p
+!        smises = dsqrt( dot_product(sdev(1:3),sdev(1:3)) + 2.d0*dot_product(sdev(4:6),sdev(4:6)) )*dsqrt(1.5d0)
+        ! In the code below the strcmp( string1, string2, nchar) function returns true if the first nchar characters in strings match
+        do k = 1,n_field_variables
+            if (strcmp(field_variable_names(k),'S11',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(1)*N(1:n_nodes)*determinant*w(kint)
+            else if (strcmp(field_variable_names(k),'S22',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(2)*N(1:n_nodes)*determinant*w(kint)
+            else if (strcmp(field_variable_names(k),'S33',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(3)*N(1:n_nodes)*determinant*w(kint)
+            else if (strcmp(field_variable_names(k),'S12',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(4)*N(1:n_nodes)*determinant*w(kint)
+            else if (strcmp(field_variable_names(k),'S13',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(5)*N(1:n_nodes)*determinant*w(kint)
+            else if (strcmp(field_variable_names(k),'S23',3) ) then
+                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + stress(6)*N(1:n_nodes)*determinant*w(kint)
+!            else if (strcmp(field_variable_names(k),'SMISES',6) ) then
+!                nodal_fieldvariables(k,1:n_nodes) = nodal_fieldvariables(k,1:n_nodes) + smises*N(1:n_nodes)*determinant*w(kint)
+            endif
+        end do
+ 
+    end do
+  
+    return
+end subroutine fieldvars_hypoelastic_3dbasic
+
+
+!subroutine hypoelastic_material(straintotal,element_properties,n_properties,stress,D)
+!
+!    use Types
+!    use ParamIO
+!
+!    implicit none
+!
+!    integer, intent( in )  :: n_properties
+!
+!    real (prec), intent (in)  :: strain_total(6)
+!    real (prec), intent (in)  :: element_properties(n_properties)
+!
+!
+!
+!    real (prec), intent( out ) :: stress(6)
+!    real (prec), intent( out ) ::  D(6,6)
+!
+!
+!
+!end subroutine hypoelastic_material
