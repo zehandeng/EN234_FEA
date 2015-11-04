@@ -6,12 +6,12 @@ program en234fea
 
   implicit none
 
-!  Demo codes - basic 3D linear elasticity
-!
-  infil = './input_files/linear_hypoelastic_3d.in'
-  open (unit = IOR, file = infil, status = 'old', ERR=500)
-  outfil = './Output_files/linear_hypoelastic_3d.out'
-  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+  !  Demo codes - basic 3D linear elasticity
+  !
+!  infil = './input_files/Hyperelastic_bar_stretch.in'
+!  open (unit = IOR, file = infil, status = 'old', ERR=500)
+!  outfil = './Output_files/Hyperelastic_bar_stretch.out'
+!  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
 
 ! infil = './input_files/Holeplate_3d.in'
 !open (unit = IOR, file = infil, status = 'old', ERR=500)
@@ -80,18 +80,18 @@ program en234fea
 !  open (unit = IOR, file = infil, status = 'old', ERR=500)
 !  outfil = './Output_files/hyperelastic_bar_stretch.out'
 !  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
-!!
+!
 !!  Homework 7, stretch and rotate a hyperelastic bar
 !  infil = './input_files/Hyperelastic_stretch_rotate.in'
 !  open (unit = IOR, file = infil, status = 'old', ERR=500)
 !  outfil = './Output_files/hyperelastic_stretch_rotate.out'
 !  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
-!
+!!
 ! Homework 7, stretch a hyperelastic plate with a central hole
-!  infil = './input_files/Holeplate_hyperelastic.in'
-!  open (unit = IOR, file = infil, status = 'old', ERR=500)
-!  outfil = './Output_files/Holeplate_hyperelastic.out'
-!  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+  infil = './input_files/Holeplate_hyperelastic.in'
+  open (unit = IOR, file = infil, status = 'old', ERR=500)
+  outfil = './Output_files/Holeplate_hyperelastic.out'
+  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
 
 
 !!  Homework 8, solve the 2D Cahn-Hilliard equation
