@@ -35,10 +35,10 @@ program en234fea
 !
 !  Homework 3
 !  Basic 2 element test (one or two elements)
-!nfil = './input_files/linear_elastic_2d.in'
-!pen (unit = IOR, file = infil, status = 'old', ERR=500)
-!utfil = './Output_files/linear_elastic_2d.out'
-!pen (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+!infil = './input_files/linear_elastic_2d.in'
+!open (unit = IOR, file = infil, status = 'old', ERR=500)
+!outfil = './Output_files/linear_elastic_2d.out'
+!open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
 ! Homework 3, Basic 2D linear elasticity with different element types.
 !  infil = './input_files/holeplate_2d_tri3.in'
 !  open (unit = IOR, file = infil, status = 'old', ERR=500)
@@ -88,10 +88,10 @@ program en234fea
 !  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
 !!
 ! Homework 7, stretch a hyperelastic plate with a central hole
-  infil = './input_files/Holeplate_hyperelastic.in'
-  open (unit = IOR, file = infil, status = 'old', ERR=500)
-  outfil = './Output_files/Holeplate_hyperelastic.out'
-  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+!  infil = './input_files/Holeplate_hyperelastic.in'
+!  open (unit = IOR, file = infil, status = 'old', ERR=500)
+!  outfil = './Output_files/Holeplate_hyperelastic.out'
+!  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
 
 
 !!  Homework 8, solve the 2D Cahn-Hilliard equation
@@ -102,10 +102,21 @@ program en234fea
 
 
 !!  Homework 9, Dynamic fracture with explicit dynamics, finite strain Gurson model.
-!  infil = './input_files/notch_fracture_dynamic.in'
-!  open (unit = IOR, file = infil, status = 'old', ERR=500)
-!  outfil = './Output_files/notch_fracture_dynamic.out'
-!  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+  infil = './input_files/notch_fracture_dynamic.in'
+  open (unit = IOR, file = infil, status = 'old', ERR=500)
+  outfil = './Output_files/notch_fracture_dynamic.out'
+  open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+
+! infil = './input_files/Gurson_3d_dynamic.in'
+! open (unit = IOR, file = infil, status = 'old', ERR=500)
+! outfil = './output_files/Gurson_3d_dynamic.out'
+! open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+!
+! infil = './input_files/Linear_elastic_3d_dynamic.in'
+! open (unit = IOR, file = infil, status = 'old', ERR=500)
+! outfil = './output_files/Linear_elastic_3d_dynamic.out'
+! open (UNIT = IOW, FILE = outfil, STATUS = 'unknown', ERR=500)
+
 
   call read_input_file
   
